@@ -1,21 +1,21 @@
 name: guestbook-pulumi-monitoring
-description: Pulumi TypeScript Guestbook application with Prometheus and Grafana monitoring
+description: "Pulumi TypeScript Guestbook application with Prometheus and Grafana monitoring"
 runtime: nodejs
 template:
   config:
     isMinikube:
-      description: Whether you are deploying to minikube. If true, frontend uses ClusterIP and Grafana uses NodePort by default.
+      description: "Whether you are deploying to minikube. If true, frontend uses ClusterIP and Grafana uses NodePort by default."
       default: true
     grafanaServiceType:
-      description: Service type for Grafana: NodePort or LoadBalancer.
-      default: NodePort
+      description: "Service type for Grafana: NodePort or LoadBalancer."
+      default: "NodePort"
     grafanaNodePort:
-      description: NodePort for Grafana when grafanaServiceType is NodePort.
+      description: "NodePort for Grafana when grafanaServiceType is NodePort."
       default: 32000
     grafanaAdminPassword:
-      description: Default Grafana admin password. Set as a Pulumi secret in real environments.
+      description: "Default Grafana admin password. Set as a Pulumi secret in real environments."
       secret: true
-      default: admin123!
+      default: "admin123!"
     monitoringChartVersion:
-      description: kube-prometheus-stack Helm chart version.
-      default: 85.0.3
+      description: "kube-prometheus-stack Helm chart version."
+      default: "85.0.3"

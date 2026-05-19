@@ -2,3 +2,4 @@ node_modules/
 .pulumi/
 *.log
 .DS_Store
+Pulumi.*.yaml

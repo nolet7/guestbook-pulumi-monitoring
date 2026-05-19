@@ -365,12 +365,12 @@ const dashboard = {
         {
             id: 1,
             type: "timeseries",
-            title: "Frontend Metrics Requests/Scrapes",
+            title: "Frontend Request Rate",
             datasource: { type: "prometheus", uid: "prometheus" },
             gridPos: { h: 8, w: 12, x: 0, y: 0 },
             targets: [{
                 expr: "sum(rate(http_requests_total{namespace=\"guestbook\"}[5m]))",
-                legendFormat: "frontend http_requests_total rate",
+                legendFormat: "frontend requests/sec",
                 refId: "A",
             }],
         },
@@ -401,7 +401,7 @@ const dashboard = {
         {
             id: 4,
             type: "stat",
-            title: "Redis Backend Up",
+            title: "Redis Backend Health",
             datasource: { type: "prometheus", uid: "prometheus" },
             gridPos: { h: 8, w: 12, x: 12, y: 8 },
             targets: [{
@@ -471,7 +471,6 @@ const guestbookRules = new k8s.apiextensions.CustomResource("guestbook-prometheu
 const grafanaService = k8s.core.v1.Service.get(
     "grafana-service",
     `${monitoringNamespaceName}/monitoring-grafana`,
-    undefined,
     { dependsOn: [monitoringStack] },
 );
 

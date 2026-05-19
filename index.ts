@@ -468,19 +468,9 @@ const guestbookRules = new k8s.apiextensions.CustomResource("guestbook-prometheu
     },
 }, { dependsOn: [monitoringStack, frontendServiceMonitor, redisExporterServiceMonitor] });
 
-const grafanaService = k8s.core.v1.Service.get(
-    "grafana-service",
-    `${monitoringNamespaceName}/monitoring-grafana`,
-    { dependsOn: [monitoringStack] },
-);
-
-const grafanaLoadBalancerUrl = grafanaService.status.loadBalancer.ingress[0].apply((ingress) => {
-    if (!ingress) {
-        return "pending";
-    }
-    const host = ingress.hostname ?? ingress.ip;
-    return host ? `http://${host}` : "pending";
-});
+// Grafana is created by the kube-prometheus-stack Helm release.
+// Do not import the Helm-created Service during preview because it does not exist yet.
+// Instead, output the expected NodePort or post-deployment lookup command.
 
 export const frontendAccess = isMinikube
     ? "http://localhost:8080  (run: kubectl -n guestbook port-forward svc/frontend 8080:80)"
@@ -490,8 +480,8 @@ export const frontendAccess = isMinikube
     });
 
 export const grafanaAccess = grafanaServiceType === "NodePort"
-    ? pulumi.interpolate`http://<any-kubernetes-node-ip>:${grafanaNodePort}`
-    : grafanaLoadBalancerUrl;
+    ? pulumi.interpolate`http://<kind-node-ip>:${grafanaNodePort}  (or run: kubectl -n ${monitoringNamespaceName} port-forward svc/monitoring-grafana 3000:80)`
+    : `Run after deployment: kubectl -n ${monitoringNamespaceName} get svc monitoring-grafana`;
 
 export const grafanaPortForward = `kubectl -n ${monitoringNamespaceName} port-forward svc/monitoring-grafana 3000:80`;
 export const prometheusPortForward = `kubectl -n ${monitoringNamespaceName} port-forward svc/monitoring-kube-prometheus-prometheus 9090:9090`;

@@ -179,7 +179,7 @@ const frontendDeployment = new k8s.apps.v1.Deployment("frontend", {
                     },
                     {
                         name: "frontend-metrics",
-                        image: "prom/prometheus-example-app:v0.4.2",
+                        image: "quay.io/brancz/prometheus-example-app:v0.5.0",
                         ports: [{ name: "metrics", containerPort: 8080 }],
                         resources: {
                             requests: { cpu: "25m", memory: "32Mi" },
@@ -233,6 +233,22 @@ const monitoringStack = new k8s.helm.v3.Release("kube-prometheus-stack", {
             service: grafanaServiceType === "NodePort"
                 ? { type: "NodePort", nodePort: grafanaNodePort }
                 : { type: "LoadBalancer" },
+
+            // Required because Grafana is served from /grafana.
+            // Without this, Prometheus scrapes /metrics and Grafana redirects to localhost/grafana/metrics.
+            serviceMonitor: {
+                enabled: true,
+                path: "/grafana/metrics",
+            },
+
+            // Required when Grafana is exposed behind NGINX Ingress at /grafana.
+            "grafana.ini": {
+                server: {
+                    root_url: "%(protocol)s://%(domain)s/grafana/",
+                    serve_from_sub_path: true,
+                },
+            },
+
             sidecar: {
                 dashboards: {
                     enabled: true,
@@ -251,8 +267,124 @@ const monitoringStack = new k8s.helm.v3.Release("kube-prometheus-stack", {
                 ruleNamespaceSelector: {},
             },
         },
+
+        // LKE managed cluster: kube-proxy metrics are not exposed on port 10249.
+        // Disable this monitor to remove the false DOWN target from Prometheus.
+        kubeProxy: {
+            enabled: false,
+        },
     },
 }, { dependsOn: [monitoringNs] });
+
+// -----------------------------------------------------------------------------
+// NGINX Ingress Controller for external HTTP access
+// -----------------------------------------------------------------------------
+// This deploys an open-source Kubernetes Ingress controller.
+// In LKE, the LoadBalancer service should provision an external load balancer.
+// We will later add Ingress rules for Guestbook and Grafana.
+const ingressNamespaceName = "ingress-nginx";
+
+const ingressNs = new k8s.core.v1.Namespace("ingress-nginx-ns", {
+    metadata: {
+        name: ingressNamespaceName,
+        labels: {
+            "app.kubernetes.io/part-of": "guestbook",
+            "app.kubernetes.io/component": "ingress",
+        },
+    },
+});
+
+const nginxIngressController = new k8s.helm.v3.Release("ingress-nginx", {
+    name: "ingress-nginx",
+    namespace: ingressNamespaceName,
+    chart: "ingress-nginx",
+    repositoryOpts: {
+        repo: "https://kubernetes.github.io/ingress-nginx",
+    },
+    timeout: 600,
+    values: {
+        controller: {
+            service: {
+                type: "LoadBalancer",
+            },
+        },
+    },
+}, { dependsOn: [ingressNs] });
+
+// Guestbook public Ingress.
+// This exposes the Guestbook frontend through the NGINX LoadBalancer.
+// URL after deployment: http://<NGINX-EXTERNAL-IP>/
+const guestbookIngress = new k8s.networking.v1.Ingress("guestbook-ingress", {
+    metadata: {
+        namespace: guestbookNamespaceName,
+        name: "guestbook-ingress",
+        annotations: {
+            "kubernetes.io/ingress.class": "nginx",
+        },
+        labels: {
+            "app.kubernetes.io/part-of": "guestbook",
+            "app.kubernetes.io/component": "frontend-ingress",
+        },
+    },
+    spec: {
+        ingressClassName: "nginx",
+        rules: [{
+            http: {
+                paths: [{
+                    path: "/",
+                    pathType: "Prefix",
+                    backend: {
+                        service: {
+                            name: "frontend",
+                            port: {
+                                number: 80,
+                            },
+                        },
+                    },
+                }],
+            },
+        }],
+    },
+}, { dependsOn: [nginxIngressController, frontendService] });
+
+// -----------------------------------------------------------------------------
+// Grafana public Ingress.
+// This exposes Grafana through the same NGINX LoadBalancer at /grafana.
+// URL after deployment: http://<NGINX-EXTERNAL-IP>/grafana
+// -----------------------------------------------------------------------------
+const grafanaIngress = new k8s.networking.v1.Ingress("grafana-ingress", {
+    metadata: {
+        namespace: monitoringNamespaceName,
+        name: "grafana-ingress",
+        annotations: {
+            "kubernetes.io/ingress.class": "nginx",
+            "nginx.ingress.kubernetes.io/backend-protocol": "HTTP",
+        },
+        labels: {
+            "app.kubernetes.io/part-of": "guestbook",
+            "app.kubernetes.io/component": "grafana-ingress",
+        },
+    },
+    spec: {
+        ingressClassName: "nginx",
+        rules: [{
+            http: {
+                paths: [{
+                    path: "/grafana",
+                    pathType: "Prefix",
+                    backend: {
+                        service: {
+                            name: "monitoring-grafana",
+                            port: {
+                                number: 80,
+                            },
+                        },
+                    },
+                }],
+            },
+        }],
+    },
+}, { dependsOn: [nginxIngressController] });
 
 // -----------------------------------------------------------------------------
 // Redis exporter for backend metrics
@@ -365,11 +497,11 @@ const dashboard = {
         {
             id: 1,
             type: "timeseries",
-            title: "Frontend Request Rate",
+            title: "Frontend Metrics Targets Up",
             datasource: { type: "prometheus", uid: "prometheus" },
             gridPos: { h: 8, w: 12, x: 0, y: 0 },
             targets: [{
-                expr: "sum(rate(http_requests_total{namespace=\"guestbook\"}[5m]))",
+                expr: "sum(up{namespace=\"guestbook\", job=\"frontend\"})",
                 legendFormat: "frontend requests/sec",
                 refId: "A",
             }],
@@ -479,9 +611,7 @@ export const frontendAccess = isMinikube
         return host ? `http://${host}` : "pending";
     });
 
-export const grafanaAccess = grafanaServiceType === "NodePort"
-    ? pulumi.interpolate`http://<kind-node-ip>:${grafanaNodePort}  (or run: kubectl -n ${monitoringNamespaceName} port-forward svc/monitoring-grafana 3000:80)`
-    : `Run after deployment: kubectl -n ${monitoringNamespaceName} get svc monitoring-grafana`;
+export const grafanaAccess = pulumi.interpolate`http://localhost:3000  (run: kubectl -n ${monitoringNamespaceName} port-forward svc/monitoring-grafana 3000:80)`;
 
 export const grafanaPortForward = `kubectl -n ${monitoringNamespaceName} port-forward svc/monitoring-grafana 3000:80`;
 export const prometheusPortForward = `kubectl -n ${monitoringNamespaceName} port-forward svc/monitoring-kube-prometheus-prometheus 9090:9090`;
@@ -491,3 +621,9 @@ export const frontendServiceMonitorName = frontendServiceMonitor.metadata.name;
 export const redisExporterServiceMonitorName = redisExporterServiceMonitor.metadata.name;
 export const dashboardName = dashboardConfigMap.metadata.name;
 export const alertRuleName = guestbookRules.metadata.name;
+
+// -----------------------------------------------------------------------------
+// Public evaluator access URLs
+// -----------------------------------------------------------------------------
+export const guestbookPublicAccess = "http://139.144.165.250";
+export const grafanaPublicAccess = "http://139.144.165.250/grafana";
